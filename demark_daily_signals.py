@@ -186,22 +186,22 @@ def get_option_data(opt, price, opt_type, days_to_exp, exp, category):
         "type": opt_type,
         "action": "BUY",
         "category": category,
-        "strike": strike,
+        "strike": float(strike),
         "expiration": exp,
-        "days_to_exp": days_to_exp,
-        "bid": round(bid, 2),
-        "ask": round(ask, 2),
-        "mid_price": round(mid_price, 2),
+        "days_to_exp": int(days_to_exp),
+        "bid": round(float(bid), 2),
+        "ask": round(float(ask), 2),
+        "mid_price": round(float(mid_price), 2),
         "volume": int(volume),
         "open_interest": int(oi),
-        "iv": round(iv * 100, 1),
-        "otm_pct": round(otm_pct, 1),
-        "itm": itm,
-        "breakeven": round(breakeven, 2),
-        "breakeven_pct": round(breakeven_pct, 1),
-        "max_risk": round(mid_price * 100, 2),
-        "leverage": round(leverage, 1),
-        "cost_100shares": round(mid_price * 100, 2)
+        "iv": round(float(iv) * 100, 1),
+        "otm_pct": round(float(otm_pct), 1),
+        "itm": bool(itm),
+        "breakeven": round(float(breakeven), 2),
+        "breakeven_pct": round(float(breakeven_pct), 1),
+        "max_risk": round(float(mid_price) * 100, 2),
+        "leverage": round(float(leverage), 1),
+        "cost_100shares": round(float(mid_price) * 100, 2)
     }
 
 
@@ -415,15 +415,15 @@ def get_options_chain(symbol: str, signal_type: str, price: float, strength: int
 
         return {
             "symbol": symbol,
-            "price": price,
+            "price": float(price),
             "signal_type": signal_type,
-            "strength": strength,
+            "strength": int(strength),
             "short_term": short_term[:6],
             "leaps": leaps[:4],
             "strategies": strategies,
             "expirations_available": len(expirations),
-            "has_leaps": len(leaps_exps) > 0,
-            "has_weekly": len(weekly_exps) > 0
+            "has_leaps": bool(len(leaps_exps) > 0),
+            "has_weekly": bool(len(weekly_exps) > 0)
         }
     except Exception as e:
         return None
