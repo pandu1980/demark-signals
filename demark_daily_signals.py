@@ -154,162 +154,276 @@ PORTFOLIO_FILE = "demark_portfolio.json"
 
 # ============== Options Functions ==============
 
+def get_option_data(opt, price, opt_type, days_to_exp, exp, category):
+    """Extract option data from a row"""
+    strike = opt['strike']
+    bid = opt.get('bid', 0) or 0
+    ask = opt.get('ask', 0) or 0
+    mid_price = (bid + ask) / 2 if bid and ask else opt.get('lastPrice', 0)
+    volume = opt.get('volume', 0) or 0
+    oi = opt.get('openInterest', 0) or 0
+    iv = opt.get('impliedVolatility', 0) or 0
+
+    if mid_price <= 0:
+        return None
+
+    if opt_type == "CALL":
+        otm_pct = ((strike - price) / price) * 100
+        breakeven = strike + mid_price
+        breakeven_pct = ((breakeven - price) / price) * 100
+        itm = strike < price
+    else:  # PUT
+        otm_pct = ((price - strike) / price) * 100
+        breakeven = strike - mid_price
+        breakeven_pct = ((price - breakeven) / price) * 100
+        itm = strike > price
+
+    # Calculate leverage (delta approximation)
+    delta = max(0.1, min(0.9, 0.5 - (otm_pct / 100)))
+    leverage = (price * delta) / mid_price if mid_price > 0 else 0
+
+    return {
+        "type": opt_type,
+        "action": "BUY",
+        "category": category,
+        "strike": strike,
+        "expiration": exp,
+        "days_to_exp": days_to_exp,
+        "bid": round(bid, 2),
+        "ask": round(ask, 2),
+        "mid_price": round(mid_price, 2),
+        "volume": int(volume),
+        "open_interest": int(oi),
+        "iv": round(iv * 100, 1),
+        "otm_pct": round(otm_pct, 1),
+        "itm": itm,
+        "breakeven": round(breakeven, 2),
+        "breakeven_pct": round(breakeven_pct, 1),
+        "max_risk": round(mid_price * 100, 2),
+        "leverage": round(leverage, 1),
+        "cost_100shares": round(mid_price * 100, 2)
+    }
+
+
 def get_options_chain(symbol: str, signal_type: str, price: float, strength: int) -> dict:
-    """Get options chain and suggest trades based on DeMark signal"""
+    """Get options chain with short-term, medium-term, and LEAPS suggestions"""
     try:
         stock = yf.Ticker(symbol)
-
-        # Get available expiration dates
         expirations = stock.options
         if not expirations:
             return None
 
-        # Filter expirations: 2-8 weeks out for short-term trades
         today = datetime.now().date()
-        target_expirations = []
+
+        # Categorize expirations
+        weekly_exps = []      # 0-14 days
+        monthly_exps = []     # 15-60 days
+        leaps_exps = []       # 365+ days
+
         for exp in expirations:
             exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-            days_to_exp = (exp_date - today).days
-            if 14 <= days_to_exp <= 60:  # 2-8 weeks
-                target_expirations.append(exp)
+            days = (exp_date - today).days
+            if 0 < days <= 14:
+                weekly_exps.append((exp, days))
+            elif 15 <= days <= 60:
+                monthly_exps.append((exp, days))
+            elif days >= 365:
+                leaps_exps.append((exp, days))
 
-        if not target_expirations:
-            # Fall back to nearest expiration
-            target_expirations = expirations[:3]
+        short_term = []  # Weekly/Monthly calls/puts
+        leaps = []       # Long-term LEAPS
+        strategies = []  # Strategy suggestions
 
-        suggestions = []
-
-        for exp in target_expirations[:3]:  # Max 3 expirations
+        # ========== SHORT-TERM OPTIONS (Weekly) ==========
+        for exp, days in weekly_exps[:2]:
             try:
                 chain = stock.option_chain(exp)
-                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-                days_to_exp = (exp_date - today).days
-
                 if signal_type == "buy":
-                    # Buy CALL options for bullish signals
                     calls = chain.calls
-                    if calls.empty:
-                        continue
-
-                    # Find strikes near the money and slightly OTM
-                    atm_strike = calls.iloc[(calls['strike'] - price).abs().argsort()[:1]]['strike'].values[0]
-
-                    # Get OTM calls (strike > current price) within 5%
-                    otm_calls = calls[(calls['strike'] >= price) & (calls['strike'] <= price * 1.05)]
-
-                    if otm_calls.empty:
-                        otm_calls = calls[calls['strike'] >= price].head(3)
-
-                    for _, opt in otm_calls.head(2).iterrows():
-                        strike = opt['strike']
-                        bid = opt.get('bid', 0) or 0
-                        ask = opt.get('ask', 0) or 0
-                        mid_price = (bid + ask) / 2 if bid and ask else opt.get('lastPrice', 0)
-                        volume = opt.get('volume', 0) or 0
-                        oi = opt.get('openInterest', 0) or 0
-                        iv = opt.get('impliedVolatility', 0) or 0
-
-                        if mid_price > 0:
-                            # Calculate basic metrics
-                            otm_pct = ((strike - price) / price) * 100
-                            breakeven = strike + mid_price
-                            breakeven_pct = ((breakeven - price) / price) * 100
-
-                            suggestions.append({
-                                "type": "CALL",
-                                "action": "BUY",
-                                "strike": strike,
-                                "expiration": exp,
-                                "days_to_exp": days_to_exp,
-                                "bid": round(bid, 2),
-                                "ask": round(ask, 2),
-                                "mid_price": round(mid_price, 2),
-                                "volume": int(volume),
-                                "open_interest": int(oi),
-                                "iv": round(iv * 100, 1),
-                                "otm_pct": round(otm_pct, 1),
-                                "breakeven": round(breakeven, 2),
-                                "breakeven_pct": round(breakeven_pct, 1),
-                                "max_risk": round(mid_price * 100, 2),
-                                "risk_reward": "Unlimited upside" if otm_pct < 3 else f"Need {breakeven_pct:.1f}% move"
-                            })
-
-                else:  # sell signal
-                    # Buy PUT options for bearish signals
+                    if not calls.empty:
+                        # ATM and slightly OTM calls
+                        target_calls = calls[(calls['strike'] >= price * 0.98) & (calls['strike'] <= price * 1.05)]
+                        if target_calls.empty:
+                            target_calls = calls[calls['strike'] >= price].head(2)
+                        for _, opt in target_calls.head(2).iterrows():
+                            data = get_option_data(opt, price, "CALL", days, exp, "WEEKLY")
+                            if data:
+                                data["strategy_note"] = "Quick momentum play. High theta decay."
+                                short_term.append(data)
+                else:
                     puts = chain.puts
-                    if puts.empty:
-                        continue
-
-                    # Get OTM puts (strike < current price) within 5%
-                    otm_puts = puts[(puts['strike'] <= price) & (puts['strike'] >= price * 0.95)]
-
-                    if otm_puts.empty:
-                        otm_puts = puts[puts['strike'] <= price].tail(3)
-
-                    for _, opt in otm_puts.tail(2).iterrows():
-                        strike = opt['strike']
-                        bid = opt.get('bid', 0) or 0
-                        ask = opt.get('ask', 0) or 0
-                        mid_price = (bid + ask) / 2 if bid and ask else opt.get('lastPrice', 0)
-                        volume = opt.get('volume', 0) or 0
-                        oi = opt.get('openInterest', 0) or 0
-                        iv = opt.get('impliedVolatility', 0) or 0
-
-                        if mid_price > 0:
-                            otm_pct = ((price - strike) / price) * 100
-                            breakeven = strike - mid_price
-                            breakeven_pct = ((price - breakeven) / price) * 100
-
-                            suggestions.append({
-                                "type": "PUT",
-                                "action": "BUY",
-                                "strike": strike,
-                                "expiration": exp,
-                                "days_to_exp": days_to_exp,
-                                "bid": round(bid, 2),
-                                "ask": round(ask, 2),
-                                "mid_price": round(mid_price, 2),
-                                "volume": int(volume),
-                                "open_interest": int(oi),
-                                "iv": round(iv * 100, 1),
-                                "otm_pct": round(otm_pct, 1),
-                                "breakeven": round(breakeven, 2),
-                                "breakeven_pct": round(breakeven_pct, 1),
-                                "max_risk": round(mid_price * 100, 2),
-                                "risk_reward": f"Need {breakeven_pct:.1f}% drop"
-                            })
-            except Exception as e:
+                    if not puts.empty:
+                        target_puts = puts[(puts['strike'] >= price * 0.95) & (puts['strike'] <= price * 1.02)]
+                        if target_puts.empty:
+                            target_puts = puts[puts['strike'] <= price].tail(2)
+                        for _, opt in target_puts.tail(2).iterrows():
+                            data = get_option_data(opt, price, "PUT", days, exp, "WEEKLY")
+                            if data:
+                                data["strategy_note"] = "Quick bearish play. High theta decay."
+                                short_term.append(data)
+            except:
                 continue
 
-        # Sort by days to expiration and OTM %
-        suggestions.sort(key=lambda x: (x['days_to_exp'], x['otm_pct']))
+        # ========== MEDIUM-TERM OPTIONS (Monthly) ==========
+        for exp, days in monthly_exps[:2]:
+            try:
+                chain = stock.option_chain(exp)
+                if signal_type == "buy":
+                    calls = chain.calls
+                    if not calls.empty:
+                        target_calls = calls[(calls['strike'] >= price) & (calls['strike'] <= price * 1.10)]
+                        if target_calls.empty:
+                            target_calls = calls[calls['strike'] >= price].head(3)
+                        for _, opt in target_calls.head(2).iterrows():
+                            data = get_option_data(opt, price, "CALL", days, exp, "MONTHLY")
+                            if data:
+                                data["strategy_note"] = "Swing trade. Good balance of cost and time."
+                                short_term.append(data)
+                else:
+                    puts = chain.puts
+                    if not puts.empty:
+                        target_puts = puts[(puts['strike'] >= price * 0.90) & (puts['strike'] <= price)]
+                        if target_puts.empty:
+                            target_puts = puts[puts['strike'] <= price].tail(3)
+                        for _, opt in target_puts.tail(2).iterrows():
+                            data = get_option_data(opt, price, "PUT", days, exp, "MONTHLY")
+                            if data:
+                                data["strategy_note"] = "Swing trade bearish. Good time value."
+                                short_term.append(data)
+            except:
+                continue
 
-        # Add spread suggestions for stronger signals
-        spreads = []
-        if strength >= 4 and len(suggestions) >= 2:
-            if signal_type == "buy":
-                spreads.append({
-                    "strategy": "Bull Call Spread",
-                    "description": f"Buy {suggestions[0]['strike']} Call, Sell higher strike Call",
-                    "risk": "Limited to net debit",
-                    "reward": "Limited to spread width minus debit"
-                })
-            else:
-                spreads.append({
-                    "strategy": "Bear Put Spread",
-                    "description": f"Buy {suggestions[0]['strike']} Put, Sell lower strike Put",
-                    "risk": "Limited to net debit",
-                    "reward": "Limited to spread width minus debit"
-                })
+        # ========== LEAPS (1+ year) ==========
+        for exp, days in leaps_exps[:2]:
+            try:
+                chain = stock.option_chain(exp)
+                if signal_type == "buy":
+                    calls = chain.calls
+                    if not calls.empty:
+                        # For LEAPS, look at ITM and ATM for better delta
+                        itm_calls = calls[(calls['strike'] >= price * 0.80) & (calls['strike'] <= price * 1.05)]
+                        if itm_calls.empty:
+                            itm_calls = calls[calls['strike'] <= price * 1.10].tail(3)
+                        for _, opt in itm_calls.tail(3).iterrows():
+                            data = get_option_data(opt, price, "CALL", days, exp, "LEAPS")
+                            if data:
+                                # LEAPS specific calculations
+                                annual_cost = data["mid_price"] / (days / 365)
+                                data["annual_cost"] = round(annual_cost, 2)
+                                data["strategy_note"] = "Long-term bullish. Stock replacement strategy."
+                                if data["itm"]:
+                                    data["strategy_note"] = "Deep ITM LEAPS. High delta, lower risk."
+                                leaps.append(data)
+                else:
+                    puts = chain.puts
+                    if not puts.empty:
+                        # For bearish LEAPS
+                        otm_puts = puts[(puts['strike'] >= price * 0.70) & (puts['strike'] <= price)]
+                        if otm_puts.empty:
+                            otm_puts = puts[puts['strike'] <= price].tail(3)
+                        for _, opt in otm_puts.tail(3).iterrows():
+                            data = get_option_data(opt, price, "PUT", days, exp, "LEAPS")
+                            if data:
+                                annual_cost = data["mid_price"] / (days / 365)
+                                data["annual_cost"] = round(annual_cost, 2)
+                                data["strategy_note"] = "Long-term hedge or bearish bet."
+                                leaps.append(data)
+            except:
+                continue
+
+        # ========== STRATEGY SUGGESTIONS ==========
+
+        # Bull Call Spread (for buy signals)
+        if signal_type == "buy" and len(short_term) >= 2:
+            lower = short_term[0]
+            strategies.append({
+                "name": "Bull Call Spread",
+                "type": "DEBIT SPREAD",
+                "category": "SHORT-TERM",
+                "description": f"Buy ${lower['strike']} Call, Sell higher strike Call",
+                "expiration": lower['expiration'],
+                "max_risk": "Net debit paid",
+                "max_reward": "Spread width - debit",
+                "best_for": "Moderately bullish, capped upside",
+                "breakeven": f"Lower strike + net debit"
+            })
+
+        # Bear Put Spread (for sell signals)
+        if signal_type == "sell" and len(short_term) >= 2:
+            higher = short_term[0]
+            strategies.append({
+                "name": "Bear Put Spread",
+                "type": "DEBIT SPREAD",
+                "category": "SHORT-TERM",
+                "description": f"Buy ${higher['strike']} Put, Sell lower strike Put",
+                "expiration": higher['expiration'],
+                "max_risk": "Net debit paid",
+                "max_reward": "Spread width - debit",
+                "best_for": "Moderately bearish, limited risk",
+                "breakeven": f"Higher strike - net debit"
+            })
+
+        # LEAPS Call (stock replacement)
+        if signal_type == "buy" and len(leaps) >= 1:
+            leap = leaps[0]
+            strategies.append({
+                "name": "LEAPS Call (Stock Replacement)",
+                "type": "LONG CALL",
+                "category": "LEAPS",
+                "description": f"Buy ${leap['strike']} LEAPS Call exp {leap['expiration']}",
+                "expiration": leap['expiration'],
+                "max_risk": f"${leap['cost_100shares']} per contract",
+                "max_reward": "Unlimited upside",
+                "best_for": "Long-term bullish with less capital",
+                "leverage": f"{leap['leverage']}x leverage vs stock"
+            })
+
+        # Poor Man's Covered Call
+        if signal_type == "buy" and len(leaps) >= 1 and len(short_term) >= 1:
+            leap = leaps[0]
+            short = short_term[0]
+            strategies.append({
+                "name": "Poor Man's Covered Call",
+                "type": "DIAGONAL SPREAD",
+                "category": "INCOME",
+                "description": f"Buy ${leap['strike']} LEAPS, Sell ${short['strike']} short-term Call",
+                "expiration": f"LEAPS: {leap['expiration']}, Short: {short['expiration']}",
+                "max_risk": "LEAPS cost - premium received",
+                "max_reward": "Premium income + appreciation",
+                "best_for": "Generate income on bullish position",
+                "note": "Requires management - roll short calls"
+            })
+
+        # Protective Put (LEAPS)
+        if signal_type == "sell" and len(leaps) >= 1:
+            leap = leaps[0]
+            strategies.append({
+                "name": "LEAPS Protective Put",
+                "type": "LONG PUT",
+                "category": "HEDGE",
+                "description": f"Buy ${leap['strike']} LEAPS Put exp {leap['expiration']}",
+                "expiration": leap['expiration'],
+                "max_risk": f"${leap['cost_100shares']} per contract",
+                "max_reward": "Protection down to strike",
+                "best_for": "Long-term portfolio hedge",
+                "note": "Insurance against market decline"
+            })
+
+        # Sort results
+        short_term.sort(key=lambda x: (0 if x['category'] == 'WEEKLY' else 1, x['days_to_exp']))
+        leaps.sort(key=lambda x: (x['days_to_exp'], -x.get('leverage', 0)))
 
         return {
             "symbol": symbol,
             "price": price,
             "signal_type": signal_type,
             "strength": strength,
-            "suggestions": suggestions[:6],  # Top 6 suggestions
-            "spreads": spreads,
-            "expirations_available": len(expirations)
+            "short_term": short_term[:6],
+            "leaps": leaps[:4],
+            "strategies": strategies,
+            "expirations_available": len(expirations),
+            "has_leaps": len(leaps_exps) > 0,
+            "has_weekly": len(weekly_exps) > 0
         }
     except Exception as e:
         return None
@@ -322,9 +436,10 @@ def get_options_for_signals(signals: list) -> list:
     # Only process strong signals (strength >= 3)
     strong_signals = [s for s in signals if s.get('strength', 0) >= 3]
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    max_workers = 3 if IS_CLOUD else 5
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {}
-        for sig in strong_signals[:20]:  # Limit to top 20
+        for sig in strong_signals[:15]:  # Limit to top 15
             future = executor.submit(
                 get_options_chain,
                 sig['symbol'],
@@ -335,12 +450,16 @@ def get_options_for_signals(signals: list) -> list:
             futures[future] = sig
 
         for future in as_completed(futures):
-            result = future.result()
-            if result and result.get('suggestions'):
-                sig = futures[future]
-                result['signal'] = sig['signal']
-                result['trade_idea'] = sig['trade_idea']
-                options_data.append(result)
+            try:
+                result = future.result()
+                # Check if we have any options data
+                if result and (result.get('short_term') or result.get('leaps')):
+                    sig = futures[future]
+                    result['signal'] = sig.get('signal', '')
+                    result['trade_idea'] = sig.get('trade_idea', '')
+                    options_data.append(result)
+            except:
+                pass
 
     # Sort by signal strength
     options_data.sort(key=lambda x: -x['strength'])
@@ -1628,42 +1747,104 @@ HTML_TEMPLATE = """
                     <div class="options-header">
                         <div>
                             <span class="options-symbol">${opt.symbol}</span>
-                            <span class="signal-badge ${opt.signal_type}" style="margin-left:8px;">${opt.signal}</span>
+                            <span class="signal-badge ${opt.signal_type}" style="margin-left:8px;">${opt.signal || (opt.signal_type === 'buy' ? 'BULLISH' : 'BEARISH')}</span>
                         </div>
                         <div style="text-align:right;">
                             <div style="font-size:16px;font-weight:600;">$${opt.price}</div>
                             <div class="options-signal">Strength: ${opt.strength}/5</div>
                         </div>
                     </div>
-                    <div class="trade-idea" style="margin-bottom:10px;">${opt.trade_idea}</div>
-                    <div class="options-grid">
-                        ${opt.suggestions.map(s => `
-                            <div class="option-row">
-                                <div class="option-type ${s.type.toLowerCase()}">${s.action} ${s.type}</div>
-                                <div class="option-details">
-                                    <span class="option-strike">$${s.strike} Strike</span>
-                                    <span class="option-exp">${s.expiration} (${s.days_to_exp}d)</span>
-                                </div>
-                                <div class="option-price">
-                                    <div class="option-mid">$${s.mid_price}</div>
-                                    <div class="option-spread">${s.bid} / ${s.ask}</div>
-                                </div>
-                                <div class="option-metrics">
-                                    <div class="option-iv">IV: ${s.iv}%</div>
-                                    <div>Vol: ${s.volume}</div>
-                                </div>
+
+                    ${opt.trade_idea ? `<div class="trade-idea" style="margin-bottom:10px;">${opt.trade_idea}</div>` : ''}
+
+                    <!-- SHORT-TERM OPTIONS -->
+                    ${opt.short_term && opt.short_term.length > 0 ? `
+                        <div style="margin-bottom:12px;">
+                            <div style="font-size:12px;font-weight:600;color:#00d4aa;margin-bottom:6px;display:flex;align-items:center;">
+                                <span style="background:#00d4aa;color:#0f1419;padding:2px 6px;border-radius:3px;margin-right:8px;">SHORT-TERM</span>
+                                Weekly & Monthly Options
                             </div>
-                        `).join('')}
-                    </div>
-                    ${opt.spreads && opt.spreads.length > 0 ? `
-                        <div class="spread-suggestion">
-                            <div class="spread-name">${opt.spreads[0].strategy}</div>
-                            <div class="spread-desc">${opt.spreads[0].description}</div>
+                            <div class="options-grid">
+                                ${opt.short_term.map(s => `
+                                    <div class="option-row">
+                                        <div class="option-type ${s.type.toLowerCase()}">
+                                            ${s.category}<br>${s.type}
+                                        </div>
+                                        <div class="option-details">
+                                            <span class="option-strike">$${s.strike} Strike</span>
+                                            <span class="option-exp">${s.expiration} (${s.days_to_exp}d)</span>
+                                            <span style="font-size:10px;color:#71767b;">${s.strategy_note || ''}</span>
+                                        </div>
+                                        <div class="option-price">
+                                            <div class="option-mid">$${s.mid_price}</div>
+                                            <div class="option-spread">${s.bid} / ${s.ask}</div>
+                                        </div>
+                                        <div class="option-metrics">
+                                            <div class="option-iv">IV: ${s.iv}%</div>
+                                            <div>Lev: ${s.leverage}x</div>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
                         </div>
                     ` : ''}
+
+                    <!-- LEAPS OPTIONS -->
+                    ${opt.leaps && opt.leaps.length > 0 ? `
+                        <div style="margin-bottom:12px;">
+                            <div style="font-size:12px;font-weight:600;color:#ffd700;margin-bottom:6px;display:flex;align-items:center;">
+                                <span style="background:#ffd700;color:#0f1419;padding:2px 6px;border-radius:3px;margin-right:8px;">LEAPS</span>
+                                Long-Term Options (1+ Year)
+                            </div>
+                            <div class="options-grid">
+                                ${opt.leaps.map(s => `
+                                    <div class="option-row" style="border-left:2px solid #ffd700;">
+                                        <div class="option-type ${s.type.toLowerCase()}" style="background:rgba(255,215,0,0.15);color:#ffd700;">
+                                            LEAPS<br>${s.type}
+                                        </div>
+                                        <div class="option-details">
+                                            <span class="option-strike">$${s.strike} Strike ${s.itm ? '(ITM)' : '(OTM)'}</span>
+                                            <span class="option-exp">${s.expiration} (${s.days_to_exp}d)</span>
+                                            <span style="font-size:10px;color:#ffd700;">${s.strategy_note || ''}</span>
+                                        </div>
+                                        <div class="option-price">
+                                            <div class="option-mid">$${s.mid_price}</div>
+                                            <div class="option-spread">$${s.cost_100shares}/contract</div>
+                                        </div>
+                                        <div class="option-metrics">
+                                            <div style="color:#ffd700;">Lev: ${s.leverage}x</div>
+                                            <div>IV: ${s.iv}%</div>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    <!-- STRATEGIES -->
+                    ${opt.strategies && opt.strategies.length > 0 ? `
+                        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #2f3336;">
+                            <div style="font-size:12px;font-weight:600;color:#00a8e8;margin-bottom:8px;">STRATEGY SUGGESTIONS</div>
+                            ${opt.strategies.map(strat => `
+                                <div class="spread-suggestion" style="margin-bottom:8px;background:linear-gradient(135deg,rgba(0,168,232,0.1),rgba(0,212,170,0.05));">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                                        <div class="spread-name" style="color:#00a8e8;">${strat.name}</div>
+                                        <span style="font-size:10px;background:#2f3336;padding:2px 6px;border-radius:3px;">${strat.category}</span>
+                                    </div>
+                                    <div class="spread-desc">${strat.description}</div>
+                                    <div style="display:flex;gap:16px;margin-top:6px;font-size:11px;">
+                                        <span style="color:#f23645;">Risk: ${strat.max_risk}</span>
+                                        <span style="color:#00d4aa;">Reward: ${strat.max_reward}</span>
+                                    </div>
+                                    ${strat.best_for ? `<div style="font-size:10px;color:#71767b;margin-top:4px;">Best for: ${strat.best_for}</div>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+
                     <div class="options-footer">
-                        <span>Max Risk: $${opt.suggestions[0]?.max_risk || 'N/A'} per contract</span>
-                        <span>${opt.suggestions[0]?.risk_reward || ''}</span>
+                        <span>${opt.has_weekly ? 'Weekly available' : ''} ${opt.has_leaps ? '| LEAPS available' : ''}</span>
+                        <span>${opt.expirations_available} expirations</span>
                     </div>
                 </div>
             `).join('');
