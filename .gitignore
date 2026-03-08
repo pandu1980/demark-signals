@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+
+# Data files
+*.csv
+*.html
+*.json
+!render.yaml
+
+# Other apps (not needed for deployment)
+*_scanner.py
+*_web.py
+*_options.py
+*_app.py
+analyze_*.py
+generate_*.py
+coin_*.py
+wardrobe*
+english_*
+stock-screener/
+wiz-remediation/
+wardrobe_*/
+2/
+nul
+
+# Keep only main app
+!demark_daily_signals.py
