@@ -542,14 +542,14 @@ def get_stock_data(symbol: str, days: int = 120) -> dict:
         return None
 
 
-def get_demark_signals(symbol: str, days: int = 120) -> dict:
+def get_demark_signals(symbol: str, days: int = 60) -> dict:
     """Get DeMark signals for a stock"""
     try:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
 
         stock = yf.Ticker(symbol)
-        df = stock.history(start=start_date, end=end_date)
+        df = stock.history(start=start_date, end=end_date, timeout=10)
 
         if df.empty or len(df) < 20:
             return None
@@ -684,7 +684,7 @@ def scan_stocks(symbols: list, use_cache: bool = True) -> list:
             return _scan_cache["data"]
 
     results = []
-    with ThreadPoolExecutor(max_workers=5) as executor:  # Reduced workers for cloud
+    with ThreadPoolExecutor(max_workers=3) as executor:  # Minimal workers for free tier
         futures = {executor.submit(get_demark_signals, sym): sym for sym in symbols}
         for future in as_completed(futures):
             try:
@@ -716,37 +716,27 @@ def save_portfolio(data):
         json.dump(data, f, indent=2)
 
 
-# Stock Universe - Optimized for cloud (top 75 most traded)
+# Stock Universe - Minimal for free cloud tier (30 stocks)
 ALL_STOCKS = [
-    # Mega Cap Tech
+    # Mega Cap (7)
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
-    # Tech
-    "AMD", "AVGO", "CRM", "ADBE", "ORCL", "INTC", "QCOM", "MU", "AMAT",
-    # AI & Cloud
-    "PLTR", "SNOW", "NET", "CRWD", "PANW", "DDOG", "SMCI",
-    # Finance
-    "JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "AXP", "BLK", "SCHW",
-    # Healthcare
-    "JNJ", "UNH", "PFE", "MRK", "ABBV", "LLY", "TMO", "ABT", "BMY", "AMGN",
-    # Consumer
-    "WMT", "COST", "HD", "MCD", "NKE", "SBUX", "TGT", "LOW", "PG", "KO", "PEP",
-    # Media & Entertainment
-    "DIS", "NFLX", "CMCSA",
-    # Industrial
-    "BA", "CAT", "GE", "HON", "UPS", "LMT", "RTX", "DE",
-    # Energy
-    "XOM", "CVX", "COP", "SLB", "OXY",
-    # EV & Clean
-    "RIVN", "LCID", "ENPH", "FSLR",
-    # Fintech
-    "PYPL", "COIN", "SOFI", "AFRM",
-    # ETFs
-    "SPY", "QQQ", "IWM",
+    # Tech & AI (8)
+    "AMD", "AVGO", "CRM", "PLTR", "SMCI", "CRWD", "SNOW", "NET",
+    # Finance (5)
+    "JPM", "V", "MA", "GS", "BLK",
+    # Healthcare (4)
+    "UNH", "LLY", "JNJ", "PFE",
+    # Consumer (3)
+    "WMT", "COST", "MCD",
+    # Energy (2)
+    "XOM", "CVX",
+    # ETF (1)
+    "SPY",
 ]
 
-# Cache for scan results (5 min cache)
+# Cache for scan results (10 min cache for free tier)
 _scan_cache = {"data": None, "timestamp": None}
-CACHE_DURATION = 300  # 5 minutes
+CACHE_DURATION = 600  # 10 minutes
 
 
 # ============== HTML Template ==============
