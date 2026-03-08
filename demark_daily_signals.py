@@ -542,14 +542,14 @@ def get_stock_data(symbol: str, days: int = 120) -> dict:
         return None
 
 
-def get_demark_signals(symbol: str, days: int = 60) -> dict:
+def get_demark_signals(symbol: str, days: int = 90) -> dict:
     """Get DeMark signals for a stock"""
     try:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
 
         stock = yf.Ticker(symbol)
-        df = stock.history(start=start_date, end=end_date, timeout=10)
+        df = stock.history(start=start_date, end=end_date)
 
         if df.empty or len(df) < 20:
             return None
@@ -684,7 +684,8 @@ def scan_stocks(symbols: list, use_cache: bool = True) -> list:
             return _scan_cache["data"]
 
     results = []
-    with ThreadPoolExecutor(max_workers=3) as executor:  # Minimal workers for free tier
+    max_workers = 3 if IS_CLOUD else 10  # More workers locally
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(get_demark_signals, sym): sym for sym in symbols}
         for future in as_completed(futures):
             try:
@@ -716,27 +717,85 @@ def save_portfolio(data):
         json.dump(data, f, indent=2)
 
 
-# Stock Universe - Minimal for free cloud tier (30 stocks)
-ALL_STOCKS = [
-    # Mega Cap (7)
+# Stock Universe - Cloud version (30 stocks for free tier)
+CLOUD_STOCKS = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
-    # Tech & AI (8)
     "AMD", "AVGO", "CRM", "PLTR", "SMCI", "CRWD", "SNOW", "NET",
-    # Finance (5)
     "JPM", "V", "MA", "GS", "BLK",
-    # Healthcare (4)
     "UNH", "LLY", "JNJ", "PFE",
-    # Consumer (3)
     "WMT", "COST", "MCD",
-    # Energy (2)
     "XOM", "CVX",
-    # ETF (1)
     "SPY",
 ]
 
-# Cache for scan results (10 min cache for free tier)
+# Stock Universe - Full list for local scanning (450+ stocks)
+FULL_STOCKS = [
+    # Mega Cap Tech
+    "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "NVDA", "TSLA", "AVGO", "ORCL",
+    # Tech
+    "CRM", "ADBE", "AMD", "CSCO", "INTC", "IBM", "QCOM", "TXN", "NOW", "INTU",
+    "AMAT", "MU", "LRCX", "SNPS", "CDNS", "KLAC", "MRVL", "ADI", "NXPI", "MPWR",
+    # AI & Cloud
+    "PLTR", "SNOW", "NET", "CRWD", "PANW", "DDOG", "ZS", "FTNT", "MDB", "ESTC",
+    "SMCI", "ARM", "AI", "PATH", "CFLT", "GTLB", "MNDY", "DOCN",
+    # Finance
+    "JPM", "BAC", "WFC", "GS", "MS", "C", "BLK", "SCHW", "AXP", "V", "MA", "PYPL",
+    "COF", "USB", "PNC", "TFC", "BK", "STT", "SPGI", "MCO", "ICE", "CME", "NDAQ",
+    "AON", "MMC", "AIG", "MET", "PRU", "ALL", "TRV", "CB", "AFL",
+    # Healthcare
+    "JNJ", "UNH", "PFE", "MRK", "ABBV", "LLY", "TMO", "ABT", "DHR", "BMY",
+    "AMGN", "GILD", "VRTX", "REGN", "ISRG", "MDT", "SYK", "BSX", "ZTS", "CI",
+    "ELV", "HUM", "CVS", "MCK", "BIIB", "MRNA", "DXCM", "IDXX", "IQV", "ALGN",
+    # Consumer
+    "WMT", "PG", "KO", "PEP", "COST", "HD", "MCD", "NKE", "SBUX", "TGT",
+    "LOW", "TJX", "ROST", "DG", "DLTR", "YUM", "CMG", "DPZ", "LULU", "DECK",
+    "ULTA", "BBY", "EBAY", "ETSY", "ORLY", "AZO", "TSCO",
+    # Food & Beverage
+    "MDLZ", "CL", "EL", "KHC", "GIS", "HSY", "MKC", "STZ", "MNST", "KDP",
+    # Entertainment
+    "DIS", "NFLX", "CMCSA", "WBD", "EA", "TTWO", "RBLX", "SPOT", "ROKU", "TTD",
+    # Industrial
+    "BA", "CAT", "GE", "HON", "UPS", "FDX", "LMT", "RTX", "DE", "MMM",
+    "EMR", "ROK", "ETN", "PH", "ITW", "PCAR", "CMI", "CSX", "UNP", "NSC",
+    "GD", "NOC", "TDG", "AXON",
+    # Energy
+    "XOM", "CVX", "COP", "SLB", "EOG", "OXY", "PSX", "VLO", "MPC", "DVN",
+    "HAL", "BKR", "FANG", "OVV", "CTRA",
+    # Utilities & REITs
+    "NEE", "DUK", "SO", "AEP", "EXC", "SRE", "XEL", "WEC", "ED",
+    "AMT", "PLD", "CCI", "EQIX", "PSA", "SPG", "O", "DLR", "WELL",
+    # Telecom
+    "T", "VZ", "TMUS",
+    # Materials
+    "LIN", "APD", "SHW", "ECL", "DD", "PPG", "NEM", "FCX", "NUE", "STLD",
+    "VMC", "MLM", "CF", "MOS", "ALB",
+    # Growth & EV
+    "UBER", "LYFT", "SHOP", "COIN", "HOOD", "RIVN", "LCID", "NIO", "XPEV", "LI",
+    "ENPH", "SEDG", "FSLR", "RUN",
+    # Biotech
+    "MRNA", "BNTX", "CRSP", "NTLA", "BEAM", "EXAS", "ILMN",
+    # Fintech
+    "AFRM", "UPST", "SOFI", "NU", "TOST",
+    # E-commerce
+    "MELI", "SE", "CPNG", "BABA", "JD", "PDD",
+    # Software
+    "OKTA", "TEAM", "HUBS", "VEEV", "WDAY", "ZM", "DOCU",
+    # Small/Mid Cap
+    "CELH", "CAVA", "BROS", "SHAK", "WING", "AXON", "KEYS", "CROX", "ONON",
+    "ELF", "FIVE", "BOOT", "DOCS",
+    # ETFs
+    "SPY", "QQQ", "IWM", "DIA", "XLF", "XLE", "XLK", "XLV", "SMH", "SOXX",
+    # BRK
+    "BRK-B",
+]
+
+# Use cloud list on Render, full list locally
+IS_CLOUD = os.environ.get('RENDER', '') != '' or os.environ.get('PORT', '') != ''
+ALL_STOCKS = CLOUD_STOCKS if IS_CLOUD else FULL_STOCKS
+
+# Cache settings
 _scan_cache = {"data": None, "timestamp": None}
-CACHE_DURATION = 600  # 10 minutes
+CACHE_DURATION = 600 if IS_CLOUD else 300  # 10 min cloud, 5 min local
 
 
 # ============== HTML Template ==============
