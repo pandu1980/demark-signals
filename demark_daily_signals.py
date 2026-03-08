@@ -673,17 +673,33 @@ def get_demark_signals(symbol: str, days: int = 120) -> dict:
         return None
 
 
-def scan_stocks(symbols: list) -> list:
-    """Scan multiple stocks in parallel"""
+def scan_stocks(symbols: list, use_cache: bool = True) -> list:
+    """Scan multiple stocks in parallel with caching"""
+    global _scan_cache
+
+    # Check cache
+    if use_cache and _scan_cache["data"] is not None:
+        cache_age = (datetime.now() - _scan_cache["timestamp"]).total_seconds()
+        if cache_age < CACHE_DURATION:
+            return _scan_cache["data"]
+
     results = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:  # Reduced workers for cloud
         futures = {executor.submit(get_demark_signals, sym): sym for sym in symbols}
         for future in as_completed(futures):
-            result = future.result()
-            if result and result["signal"] != "NEUTRAL":
-                results.append(result)
+            try:
+                result = future.result()
+                if result and result["signal"] != "NEUTRAL":
+                    results.append(result)
+            except:
+                pass
 
     results.sort(key=lambda x: (-x["strength"], x["symbol"]))
+
+    # Update cache
+    _scan_cache["data"] = results
+    _scan_cache["timestamp"] = datetime.now()
+
     return results
 
 
@@ -700,113 +716,37 @@ def save_portfolio(data):
         json.dump(data, f, indent=2)
 
 
-# Stock Universe - Expanded
-SP500_STOCKS = [
-    # Tech Giants
-    "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "NVDA", "TSLA", "AVGO", "ORCL",
-    "CRM", "ADBE", "AMD", "CSCO", "INTC", "IBM", "QCOM", "TXN", "NOW", "INTU",
-    "AMAT", "MU", "LRCX", "SNPS", "CDNS", "KLAC", "MRVL", "ADI", "NXPI", "MPWR",
-    # Cybersecurity & Cloud
-    "PANW", "CRWD", "FTNT", "ZS", "DDOG", "NET", "SNOW", "PLTR", "MDB", "ESTC",
+# Stock Universe - Optimized for cloud (top 75 most traded)
+ALL_STOCKS = [
+    # Mega Cap Tech
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
+    # Tech
+    "AMD", "AVGO", "CRM", "ADBE", "ORCL", "INTC", "QCOM", "MU", "AMAT",
+    # AI & Cloud
+    "PLTR", "SNOW", "NET", "CRWD", "PANW", "DDOG", "SMCI",
     # Finance
-    "JPM", "BAC", "WFC", "GS", "MS", "C", "BLK", "SCHW", "AXP", "V", "MA", "PYPL",
-    "COF", "USB", "PNC", "TFC", "BK", "STT", "SPGI", "MCO", "ICE", "CME", "NDAQ",
-    "AON", "MMC", "AJG", "BRO", "WTW", "AFL", "MET", "PRU", "AIG", "ALL", "TRV",
-    # Healthcare & Pharma
-    "JNJ", "UNH", "PFE", "MRK", "ABBV", "LLY", "TMO", "ABT", "DHR", "BMY",
-    "AMGN", "GILD", "VRTX", "REGN", "ISRG", "MDT", "SYK", "BSX", "ZTS", "CI",
-    "ELV", "HUM", "CNC", "CVS", "MCK", "CAH", "ABC", "BIIB", "MRNA", "DXCM",
-    "IDXX", "IQV", "A", "MTD", "WAT", "BIO", "TECH", "HOLX", "ALGN",
+    "JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "AXP", "BLK", "SCHW",
+    # Healthcare
+    "JNJ", "UNH", "PFE", "MRK", "ABBV", "LLY", "TMO", "ABT", "BMY", "AMGN",
     # Consumer
-    "WMT", "PG", "KO", "PEP", "COST", "HD", "MCD", "NKE", "SBUX", "TGT",
-    "LOW", "TJX", "ROST", "DG", "DLTR", "YUM", "CMG", "DPZ", "LULU", "DECK",
-    "ULTA", "BBY", "EBAY", "ETSY", "W", "CHWY", "BURL", "GPS", "ANF", "AEO",
-    "POOL", "TSCO", "ORLY", "AZO", "AAP", "KMX", "GPC", "LKQ",
-    # Food & Beverage
-    "MDLZ", "CL", "EL", "KHC", "GIS", "K", "SJM", "CAG", "HSY", "MKC",
-    "STZ", "BF-B", "TAP", "SAM", "MNST", "KDP",
-    # Entertainment & Media
-    "DIS", "NFLX", "CMCSA", "WBD", "PARA", "FOX", "LYV", "EA", "TTWO", "RBLX",
-    "SPOT", "ROKU", "ZG", "MTCH", "PINS", "SNAP", "TTD",
+    "WMT", "COST", "HD", "MCD", "NKE", "SBUX", "TGT", "LOW", "PG", "KO", "PEP",
+    # Media & Entertainment
+    "DIS", "NFLX", "CMCSA",
     # Industrial
-    "BA", "CAT", "GE", "HON", "UPS", "FDX", "LMT", "RTX", "DE", "MMM",
-    "EMR", "ROK", "ETN", "PH", "ITW", "IR", "DOV", "AME", "PCAR", "CMI",
-    "FAST", "ODFL", "JBHT", "XPO", "CHRW", "EXPD", "CSX", "UNP", "NSC",
-    "GD", "NOC", "HII", "LHX", "TXT", "HWM", "TDG", "AXON",
+    "BA", "CAT", "GE", "HON", "UPS", "LMT", "RTX", "DE",
     # Energy
-    "XOM", "CVX", "COP", "SLB", "EOG", "OXY", "PSX", "VLO", "MPC", "DVN",
-    "PXD", "FANG", "HAL", "BKR", "HES", "MRO", "APA", "OVV", "CTRA",
-    # Utilities & REITs
-    "NEE", "DUK", "SO", "D", "AEP", "EXC", "SRE", "XEL", "WEC", "ED",
-    "PEG", "ES", "AWK", "AMT", "PLD", "CCI", "EQIX", "PSA", "SPG", "O",
-    "WELL", "AVB", "EQR", "DLR", "ARE", "VTR", "ESS", "MAA", "UDR",
-    # Telecom
-    "T", "VZ", "TMUS",
-    # Materials
-    "LIN", "APD", "SHW", "ECL", "DD", "PPG", "NEM", "FCX", "NUE", "STLD",
-    "VMC", "MLM", "CF", "MOS", "ALB", "FMC", "CE", "EMN", "WRK", "IP",
-    # BRK
-    "BRK-B",
-]
-
-GROWTH_STOCKS = [
-    # High Growth Tech
-    "UBER", "LYFT", "SHOP", "SQ", "COIN", "HOOD", "PATH", "SMCI", "ARM",
-    "CRWD", "DDOG", "NET", "SNOW", "MDB", "ESTC", "ZS", "OKTA", "TEAM",
-    "DOCU", "ZM", "BILL", "HUBS", "VEEV", "WDAY", "SPLK", "ANSS", "CDNS",
-    # AI & Semiconductor
-    "NVDA", "AMD", "AVGO", "MRVL", "ON", "SWKS", "QRVO", "WOLF", "ACLS",
-    "AEHR", "CRUS", "SYNA", "SMTC", "POWI", "DIOD", "ALGM", "RMBS",
-    # EV & Clean Energy
-    "RIVN", "LCID", "NIO", "XPEV", "LI", "CHPT", "BLNK", "EVGO",
-    "ENPH", "SEDG", "FSLR", "RUN", "NOVA", "ARRY", "SHLS",
-    # Biotech
-    "MRNA", "BNTX", "CRSP", "NTLA", "BEAM", "EDIT", "VERV", "RXRX",
-    "SGEN", "EXAS", "TWST", "PACB", "ILMN", "NVTA",
+    "XOM", "CVX", "COP", "SLB", "OXY",
+    # EV & Clean
+    "RIVN", "LCID", "ENPH", "FSLR",
     # Fintech
-    "AFRM", "UPST", "SOFI", "LC", "NU", "TOST", "FOUR", "STNE", "PAGS",
-    # E-commerce & Digital
-    "MELI", "SE", "CPNG", "BABA", "JD", "PDD", "BIDU", "KWEB",
-    # Software & SaaS
-    "CFLT", "GTLB", "MNDY", "FROG", "ASAN", "APPN", "SUMO", "DT",
+    "PYPL", "COIN", "SOFI", "AFRM",
+    # ETFs
+    "SPY", "QQQ", "IWM",
 ]
 
-DIVIDEND_STOCKS = [
-    # Dividend Aristocrats
-    "JNJ", "PG", "KO", "PEP", "MMM", "ABT", "ABBV", "XOM", "CVX", "CL",
-    "MCD", "WMT", "TGT", "LOW", "SYY", "GPC", "EMR", "ITW", "ADP", "CAT",
-    "DOV", "SHW", "ECL", "PPG", "APD", "BDX", "HRL", "MKC", "CLX", "CTAS",
-    # High Yield
-    "T", "VZ", "MO", "PM", "BTI", "IBM", "INTC", "KHC", "LYB", "OKE",
-    "KNTK", "EPD", "ET", "WMB", "KMI", "ENB",
-    # REITs (High Dividend)
-    "O", "STAG", "NNN", "STOR", "ADC", "WPC", "VICI", "GLPI", "MPW",
-]
-
-SMALL_MID_CAP = [
-    # Small/Mid Cap Growth
-    "CELH", "DUOL", "CAVA", "BROS", "SHAK", "WING", "WINGSTOP",
-    "AXON", "TER", "ZBRA", "KEYS", "MKSI", "COHR", "IPGP", "NOVT",
-    "PAYC", "PCTY", "WEX", "EXLS", "EPAM", "GLOB", "GDYN",
-    "ELF", "OLLI", "FIVE", "BOOT", "CROX", "SKX", "ONON",
-    "DOCS", "CERT", "RGEN", "NVCR", "INSP", "IRTC", "PODD",
-    # Value
-    "ALLY", "SYF", "DFS", "NAVI", "OMF", "CACC",
-]
-
-ETF_LIKE = [
-    # Major ETF components often traded
-    "SPY", "QQQ", "IWM", "DIA", "XLF", "XLE", "XLK", "XLV", "XLI", "XLP",
-    "XLY", "XLU", "XLB", "XLRE", "XLC", "SMH", "SOXX", "ARKK", "ARKG",
-]
-
-ALL_STOCKS = list(set(
-    SP500_STOCKS +
-    GROWTH_STOCKS +
-    DIVIDEND_STOCKS +
-    SMALL_MID_CAP +
-    ETF_LIKE
-))
+# Cache for scan results (5 min cache)
+_scan_cache = {"data": None, "timestamp": None}
+CACHE_DURATION = 300  # 5 minutes
 
 
 # ============== HTML Template ==============
