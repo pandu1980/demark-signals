@@ -150,6 +150,44 @@ def app_icon():
     return response
 
 PORTFOLIO_FILE = "demark_portfolio.json"
+TRADINGVIEW_SIGNALS_FILE = "tradingview_signals.json"
+
+
+# ============== TradingView Webhook Functions ==============
+
+def load_tv_signals():
+    """Load TradingView signals from file"""
+    if os.path.exists(TRADINGVIEW_SIGNALS_FILE):
+        try:
+            with open(TRADINGVIEW_SIGNALS_FILE, 'r') as f:
+                data = json.load(f)
+                # Filter signals from last 7 days
+                cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+                data['signals'] = [s for s in data.get('signals', []) if s.get('timestamp', '') > cutoff]
+                return data
+        except:
+            pass
+    return {"signals": []}
+
+
+def save_tv_signal(signal_data):
+    """Save a TradingView signal"""
+    data = load_tv_signals()
+
+    # Add timestamp if not present
+    if 'timestamp' not in signal_data:
+        signal_data['timestamp'] = datetime.now().isoformat()
+
+    # Add to signals list
+    data['signals'].insert(0, signal_data)
+
+    # Keep only last 100 signals
+    data['signals'] = data['signals'][:100]
+
+    with open(TRADINGVIEW_SIGNALS_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+    return signal_data
 
 
 # ============== Options Functions ==============
@@ -1362,6 +1400,7 @@ HTML_TEMPLATE = """
             <div class="tabs">
                 <button class="tab active" onclick="switchTab('signals')">Signals</button>
                 <button class="tab" onclick="switchTab('options')">Options</button>
+                <button class="tab" onclick="switchTab('tradingview')">TradingView</button>
                 <button class="tab" onclick="switchTab('portfolio')">Portfolio</button>
             </div>
         </div>
@@ -1394,6 +1433,39 @@ HTML_TEMPLATE = """
                         <button class="btn btn-primary btn-small" onclick="loadOptions()">Load Options</button>
                     </div>
                     <div id="optionsList"></div>
+                </div>
+
+                <div class="options-section" id="tradingviewSection">
+                    <div style="background:#1a1f2e;border-radius:8px;padding:12px;margin-bottom:12px;border:1px solid #2f3336;">
+                        <div style="font-size:14px;font-weight:600;color:#00d4aa;margin-bottom:8px;">TradingView Webhook Setup</div>
+                        <div style="font-size:12px;color:#71767b;margin-bottom:8px;">
+                            Send DeMark alerts from TradingView to this app for more accurate signals.
+                        </div>
+                        <div style="background:#0f1419;padding:8px;border-radius:4px;font-family:monospace;font-size:11px;word-break:break-all;">
+                            <span style="color:#71767b;">Webhook URL:</span><br>
+                            <span id="webhookUrl" style="color:#00d4aa;"></span>
+                        </div>
+                        <div style="margin-top:10px;font-size:11px;color:#71767b;">
+                            <strong>Alert Message Format (JSON):</strong>
+                            <pre style="background:#0f1419;padding:8px;border-radius:4px;margin-top:4px;overflow-x:auto;">
+{
+  "symbol": "{{ticker}}",
+  "signal": "BUY_9_PERFECTED",
+  "price": {{close}},
+  "timeframe": "{{interval}}",
+  "setup_count": 9,
+  "countdown": 0
+}</pre>
+                        </div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                        <span style="font-size:13px;font-weight:600;">TradingView Signals</span>
+                        <div>
+                            <button class="btn btn-primary btn-small" onclick="loadTVSignals()">Refresh</button>
+                            <button class="btn btn-secondary btn-small" onclick="clearTVSignals()">Clear All</button>
+                        </div>
+                    </div>
+                    <div id="tvSignalsList"></div>
                 </div>
 
                 <div class="portfolio-section" id="portfolioSection" style="display:none;">
@@ -1692,12 +1764,13 @@ HTML_TEMPLATE = """
         function switchTab(tab) {
             currentTab = tab;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            const tabIndex = tab === 'signals' ? 1 : tab === 'options' ? 2 : 3;
+            const tabIndex = tab === 'signals' ? 1 : tab === 'options' ? 2 : tab === 'tradingview' ? 3 : 4;
             document.querySelector(`.tab:nth-child(${tabIndex})`).classList.add('active');
 
             document.getElementById('stats').style.display = 'none';
             document.getElementById('signals').style.display = 'none';
             document.getElementById('optionsSection').classList.remove('visible');
+            document.getElementById('tradingviewSection').classList.remove('visible');
             document.getElementById('portfolioSection').style.display = 'none';
 
             if (tab === 'signals') {
@@ -1705,9 +1778,74 @@ HTML_TEMPLATE = """
                 document.getElementById('signals').style.display = 'block';
             } else if (tab === 'options') {
                 document.getElementById('optionsSection').classList.add('visible');
+            } else if (tab === 'tradingview') {
+                document.getElementById('tradingviewSection').classList.add('visible');
+                document.getElementById('webhookUrl').textContent = window.location.origin + '/api/webhook/tradingview';
+                loadTVSignals();
             } else {
                 document.getElementById('portfolioSection').style.display = 'block';
                 loadPortfolio();
+            }
+        }
+
+        // TradingView Signal Functions
+        let tvSignals = [];
+
+        async function loadTVSignals() {
+            document.getElementById('tvSignalsList').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            try {
+                const response = await fetch('/api/tradingview/signals');
+                const data = await response.json();
+                tvSignals = data.signals || [];
+                renderTVSignals();
+            } catch (error) {
+                document.getElementById('tvSignalsList').innerHTML = '<div class="empty-state"><h3>Failed to load signals</h3></div>';
+            }
+        }
+
+        function renderTVSignals() {
+            if (tvSignals.length === 0) {
+                document.getElementById('tvSignalsList').innerHTML = `
+                    <div class="empty-state">
+                        <h3>No TradingView signals yet</h3>
+                        <p>Set up alerts in TradingView using the webhook URL above</p>
+                    </div>`;
+                return;
+            }
+
+            document.getElementById('tvSignalsList').innerHTML = tvSignals.map(s => `
+                <div class="signal-card ${s.signal_type}" style="cursor:default;">
+                    <div class="signal-header">
+                        <div>
+                            <span class="symbol">${s.symbol}</span>
+                            <span class="signal-badge ${s.signal_type}">${s.signal}</span>
+                            <span style="font-size:10px;background:#ffd700;color:#0f1419;padding:2px 6px;border-radius:3px;margin-left:4px;">TV</span>
+                        </div>
+                        <div class="price-info">
+                            <div class="price">$${s.price?.toFixed(2) || 'N/A'}</div>
+                            <div style="font-size:10px;color:#71767b;">${s.timeframe || 'D'}</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
+                        <div class="metrics">
+                            ${s.setup_count ? `<span class="metric">Setup: <span>${s.setup_count}/9</span></span>` : ''}
+                            ${s.countdown ? `<span class="metric">CD: <span>${s.countdown}/13</span></span>` : ''}
+                        </div>
+                        <div style="font-size:10px;color:#71767b;">${new Date(s.timestamp).toLocaleString()}</div>
+                    </div>
+                    ${s.message ? `<div class="trade-idea" style="margin-top:6px;">${s.message}</div>` : ''}
+                </div>
+            `).join('');
+        }
+
+        async function clearTVSignals() {
+            if (!confirm('Clear all TradingView signals?')) return;
+            try {
+                await fetch('/api/tradingview/clear', { method: 'POST' });
+                tvSignals = [];
+                renderTVSignals();
+            } catch (error) {
+                console.error('Failed to clear signals');
             }
         }
 
@@ -2147,6 +2285,85 @@ def api_options_symbol(symbol):
         options['trade_idea'] = signal['trade_idea']
         return jsonify(options)
     return jsonify({"error": "No options data available"}), 404
+
+
+# ============== TradingView Webhook Endpoints ==============
+
+@app.route('/api/webhook/tradingview', methods=['POST'])
+def tradingview_webhook():
+    """
+    Receive TradingView alerts via webhook.
+
+    Expected JSON format:
+    {
+        "symbol": "AAPL",
+        "signal": "BUY_9" or "SELL_9" or "BUY_9_PERFECTED" etc,
+        "price": 150.25,
+        "timeframe": "D" (daily),
+        "indicator": "TD_SEQUENTIAL",
+        "setup_count": 9,
+        "countdown": 5,
+        "message": "Optional custom message"
+    }
+    """
+    try:
+        data = request.json or {}
+
+        # Parse the incoming data
+        signal = {
+            "symbol": data.get("symbol", "").upper(),
+            "signal": data.get("signal", "UNKNOWN"),
+            "price": float(data.get("price", 0)),
+            "timeframe": data.get("timeframe", "D"),
+            "indicator": data.get("indicator", "TD_SEQUENTIAL"),
+            "setup_count": int(data.get("setup_count", 0)),
+            "countdown": int(data.get("countdown", 0)),
+            "message": data.get("message", ""),
+            "timestamp": datetime.now().isoformat(),
+            "source": "tradingview"
+        }
+
+        # Determine signal type
+        sig_upper = signal["signal"].upper()
+        if "BUY" in sig_upper:
+            signal["signal_type"] = "buy"
+            signal["strength"] = 5 if "PERFECT" in sig_upper else 4
+        elif "SELL" in sig_upper:
+            signal["signal_type"] = "sell"
+            signal["strength"] = 5 if "PERFECT" in sig_upper else 4
+        else:
+            signal["signal_type"] = "neutral"
+            signal["strength"] = 2
+
+        # Save the signal
+        saved = save_tv_signal(signal)
+
+        return jsonify({
+            "status": "ok",
+            "received": saved,
+            "message": f"Signal received for {signal['symbol']}"
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.route('/api/tradingview/signals')
+def get_tv_signals():
+    """Get all TradingView signals"""
+    data = load_tv_signals()
+    return jsonify({
+        "signals": data.get("signals", []),
+        "count": len(data.get("signals", [])),
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@app.route('/api/tradingview/clear', methods=['POST'])
+def clear_tv_signals():
+    """Clear all TradingView signals"""
+    with open(TRADINGVIEW_SIGNALS_FILE, 'w') as f:
+        json.dump({"signals": []}, f)
+    return jsonify({"status": "ok", "message": "Signals cleared"})
 
 
 if __name__ == '__main__':
